@@ -3,7 +3,6 @@
 #
 # Usage:
 #   ./run.sh [vlc-options] [media]    Run VLC (interactive)
-#   ./run.sh --hierarchical           Stream media over HTTP
 #   ./run.sh --version                Show VLC version
 #   ./run.sh --help                   Show VLC help
 #

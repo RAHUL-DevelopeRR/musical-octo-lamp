@@ -122,11 +122,11 @@ vlc/build/bin/vlc-static [options] [media]
 docker build -t vlc-streaming-engine .
 
 # Run VLC inside a container
-docker run --rm vlc-streaming-engine vlc --version
+docker run --rm vlc-streaming-engine --version
 
 # Stream media (expose port 8080)
 docker run --rm -p 8080:8080 -v /path/to/media:/media vlc-streaming-engine \
-  vlc -I dummy /media/input.mp4 --sout '#std{access=http,mux=ts,dst=:8080}'
+  /media/input.mp4 --sout '#std{access=http,mux=ts,dst=:8080}'
 ```
 
 ### Common Options
