@@ -75,5 +75,11 @@ jobs:
           echo "=== Checking build artifacts ==="
           ls -la vlc/build/lib/.libs/libvlc.so*
           ls -la vlc/build/src/.libs/libvlccore.so*
+          ls -la vlc/build/bin/vlc-static
           echo "Modules built: $(find vlc/build/modules/.libs/ -name '*.so' | wc -l)"
           echo "=== VLC build verified ==="
+
+      - name: Test VLC runs
+        run: |
+          ./run.sh --version
+          timeout 5 ./run.sh -I dummy --no-video --no-audio vlc://quit || true

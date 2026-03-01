@@ -67,12 +67,88 @@ make -j$(nproc)
 docker build -t vlc-streaming-engine .
 ```
 
+## Running VLC
+
+### Quick Run (recommended)
+
+After building, use the included `run.sh` script which sets up library and plugin paths automatically:
+
+```bash
+# Show version
+./run.sh --version
+
+# Play a media file (headless, no GUI)
+./run.sh -I dummy input.mp4
+
+# Play an HTTP stream
+./run.sh -I dummy http://example.com/stream.ts
+```
+
+### Stream Media over HTTP
+
+Start a local HTTP streaming server:
+
+```bash
+./run.sh -I dummy input.mp4 \
+  --sout '#std{access=http,mux=ts,dst=:8080}'
+```
+
+Then connect from another VLC instance or player to `http://localhost:8080`.
+
+### Transcode and Save
+
+Convert a media file to a different format:
+
+```bash
+./run.sh -I dummy input.mp4 \
+  --sout '#transcode{vcodec=h264,acodec=mpga}:std{access=file,mux=ts,dst=output.ts}' \
+  vlc://quit
+```
+
+### Running from the Build Directory (manual)
+
+If you prefer not to use `run.sh`, set the environment variables yourself:
+
+```bash
+export LD_LIBRARY_PATH=vlc/build/lib/.libs:vlc/build/src/.libs
+export VLC_PLUGIN_PATH=vlc/build/modules
+vlc/build/bin/vlc-static [options] [media]
+```
+
+### Running with Docker
+
+```bash
+# Build the image
+docker build -t vlc-streaming-engine .
+
+# Run VLC inside a container
+docker run --rm vlc-streaming-engine vlc --version
+
+# Stream media (expose port 8080)
+docker run --rm -p 8080:8080 -v /path/to/media:/media vlc-streaming-engine \
+  vlc -I dummy /media/input.mp4 --sout '#std{access=http,mux=ts,dst=:8080}'
+```
+
+### Common Options
+
+| Option | Description |
+|---|---|
+| `-I dummy` | Use the dummy interface (no GUI, headless) |
+| `--no-video` | Disable video output |
+| `--no-audio` | Disable audio output |
+| `--sout '<chain>'` | Stream output chain (for streaming/transcoding) |
+| `--repeat` | Loop the playlist |
+| `vlc://quit` | Auto-quit after playback finishes |
+| `--version` | Show VLC version |
+| `--help` | Show all available options |
+
 ## Build Artifacts
 
 After a successful build, the following artifacts are produced in `vlc/build/`:
 
 | Artifact | Path | Description |
 |---|---|---|
+| `vlc-static` | `bin/` | VLC standalone executable |
 | `libvlc.so` | `lib/.libs/` | VLC public API library |
 | `libvlccore.so` | `src/.libs/` | VLC core engine |
 | Plugins (`.so`) | `modules/.libs/` | Codec, demuxer, and stream modules |
