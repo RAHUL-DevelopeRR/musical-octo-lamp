@@ -72,12 +72,14 @@ RUN apt-get update -qq && apt-get install -y -qq \
     libxml2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy built libraries and plugins
+# Copy built libraries, plugins, and executables
 COPY --from=builder /src/vlc/build/lib/.libs/libvlc*.so* /usr/local/lib/
 COPY --from=builder /src/vlc/build/src/.libs/libvlccore*.so* /usr/local/lib/
 COPY --from=builder /src/vlc/build/modules/.libs/*.so /usr/local/lib/vlc/plugins/
 COPY --from=builder /src/vlc/build/bin/vlc-cache-gen /usr/local/bin/
+COPY --from=builder /src/vlc/build/bin/.libs/vlc /usr/local/bin/vlc
 
 RUN ldconfig && vlc-cache-gen /usr/local/lib/vlc/plugins/
 
-CMD ["echo", "VLC libraries built and installed successfully"]
+ENTRYPOINT ["vlc", "-I", "dummy"]
+CMD ["--help"]
