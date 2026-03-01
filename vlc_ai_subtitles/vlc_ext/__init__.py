@@ -1,0 +1,1 @@
+"""VLC extension sub-package."""

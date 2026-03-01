@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vlc-ai-subtitles"
+version = "0.1.0"
+description = "Offline AI subtitle generation engine for VLC — powered by OpenAI Whisper"
+readme = "README.md"
+license = { text = "GPL-2.0-or-later" }
+authors = [{ name = "RAHUL-DevelopeRR" }]
+keywords = ["vlc", "subtitles", "whisper", "speech-to-text", "ai", "offline"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+requires-python = ">=3.9"
+dependencies = [
+  # Runtime dependencies: whisper and numpy are required for transcription.
+  # ffmpeg must be present on PATH for the CLI transcribe command.
+  "openai-whisper>=20231117",
+  "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "pytest-timeout>=2.1",
+]
+
+[project.scripts]
+vlc-ai-subtitles = "vlc_ai_subtitles.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vlc_ai_subtitles*"]
+
+[tool.pytest.ini_options]
+testpaths = ["vlc_ai_subtitles/tests"]
+timeout = 120
