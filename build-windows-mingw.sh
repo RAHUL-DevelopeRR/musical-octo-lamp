@@ -156,9 +156,16 @@ build_contribs() {
             --host=x86_64-w64-mingw32
     fi
 
-    # Build contrib libraries
-    make -j"${MAKE_JOBS}" .qt || true  # Qt is critical, build it first
-    make -j"${MAKE_JOBS}" || true
+    # Build contrib libraries (Qt first since it is required for the GUI)
+    if ! make -j"${MAKE_JOBS}" .qt; then
+        echo "WARNING: Qt contrib build encountered errors." >&2
+        echo "  The Qt GUI may not be available. Check the output above." >&2
+    fi
+
+    if ! make -j"${MAKE_JOBS}"; then
+        echo "WARNING: Some contrib packages failed to build." >&2
+        echo "  The main VLC build may still succeed with system-installed packages." >&2
+    fi
 
     echo "==> Contrib build complete."
 }

@@ -139,7 +139,13 @@ function Test-Prerequisites {
     if (-not (Get-Command "meson" -ErrorAction SilentlyContinue)) {
         Write-Host "  Meson not found, installing via pip..." -ForegroundColor Yellow
         python -m pip install --user meson
-        $env:PATH += ";$(python -c 'import site; print(site.getusersitepackages().replace(chr(0x5C)+chr(0x4C)+"ib"+chr(0x5C)+"site-packages", chr(0x5C)+"Scripts"))')"
+        $userScriptsDir = Join-Path ([System.Environment]::GetFolderPath("LocalApplicationData")) "Programs\Python" | Get-ChildItem -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($userScriptsDir) {
+            $env:PATH += ";$(Join-Path $userScriptsDir.FullName 'Scripts')"
+        } else {
+            $userBase = python -c "import site; print(site.getuserbase())"
+            $env:PATH += ";$(Join-Path $userBase 'Scripts')"
+        }
         Assert-Command "meson" "Run: pip install meson"
     }
 
@@ -185,8 +191,7 @@ function Build-Contribs {
         if (Test-Path $bootstrapScript) {
             Write-Host "  Bootstrapping contribs..."
             & $bootstrapScript `
-                --host=x86_64-w64-mingw32 `
-                --build=x86_64-pc-linux-gnu
+                --host=x86_64-w64-mingw32
         }
 
         # Use prebuilt contribs if available (VLC provides prebuilt Windows contribs)
