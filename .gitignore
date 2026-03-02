@@ -1,6 +1,9 @@
 # Build artifacts
 vlc/build/
+vlc/build-win64/
+vlc/contrib/win64-build/
 build/
+output/
 *.o
 *.lo
 *.la
@@ -11,6 +14,10 @@ build/
 *.dll
 *.exe
 *.dat
+*.lib
+*.obj
+*.pdb
+*.exp
 
 # Autotools generated
 vlc/configure

@@ -1,0 +1,113 @@
+name: Build VLC (Windows)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 180
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Install MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-python
+            base-devel
+            git
+            autoconf
+            automake
+            libtool
+            pkg-config
+            flex
+            bison
+            gettext-devel
+            nasm
+            yasm
+            mingw-w64-x86_64-qt6-base
+            mingw-w64-x86_64-qt6-svg
+            mingw-w64-x86_64-qt6-shadertools
+            mingw-w64-x86_64-ffmpeg
+            mingw-w64-x86_64-libgcrypt
+            mingw-w64-x86_64-libxml2
+            mingw-w64-x86_64-lua
+            mingw-w64-x86_64-protobuf
+            mingw-w64-x86_64-freetype
+            mingw-w64-x86_64-fribidi
+            mingw-w64-x86_64-harfbuzz
+            mingw-w64-x86_64-fontconfig
+            mingw-w64-x86_64-dav1d
+            mingw-w64-x86_64-opus
+            mingw-w64-x86_64-flac
+            mingw-w64-x86_64-libvorbis
+            mingw-w64-x86_64-libpng
+            mingw-w64-x86_64-libjpeg-turbo
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Bootstrap VLC
+        run: cd vlc && ./bootstrap
+
+      - name: Configure VLC (Windows x64 + Qt GUI)
+        run: |
+          mkdir -p vlc/build-win64 && cd vlc/build-win64
+          ../configure \
+            --host=x86_64-w64-mingw32 \
+            --enable-qt \
+            --enable-lua \
+            --enable-d3d11va \
+            --enable-wasapi \
+            --enable-avcodec \
+            --enable-avformat \
+            --enable-swscale \
+            --disable-xcb \
+            --disable-xvideo \
+            --disable-wayland \
+            --disable-dbus \
+            --disable-alsa \
+            --disable-pulse \
+            --disable-jack \
+            --disable-oss \
+            --enable-optimizations
+
+      - name: Build VLC
+        run: cd vlc/build-win64 && make -j"$(nproc)"
+
+      - name: Verify build artifacts
+        run: |
+          echo "=== Checking Windows build artifacts ==="
+          find vlc/build-win64 -name "vlc.exe" -o -name "libvlc.dll" | head -20
+          echo "Plugin DLLs: $(find vlc/build-win64 -name '*.dll' -path '*/modules/*' | wc -l)"
+          echo "=== Windows VLC build verified ==="
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlc-win64
+          path: |
+            vlc/build-win64/bin/*.exe
+            vlc/build-win64/lib/.libs/*.dll
+            vlc/build-win64/src/.libs/*.dll
+            vlc/build-win64/modules/.libs/*.dll
+          retention-days: 14
