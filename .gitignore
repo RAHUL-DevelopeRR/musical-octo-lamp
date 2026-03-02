@@ -1,0 +1,32 @@
+# Build artifacts
+vlc/build/
+build/
+*.o
+*.lo
+*.la
+*.so
+*.so.*
+*.a
+*.dylib
+*.dll
+*.exe
+*.dat
+
+# Autotools generated
+vlc/configure
+vlc/aclocal.m4
+vlc/autom4te.cache/
+vlc/config.h.in
+vlc/m4/libtool.m4
+vlc/m4/lt*.m4
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
