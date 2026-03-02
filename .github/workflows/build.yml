@@ -1,0 +1,85 @@
+name: Build VLC
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential \
+            autoconf \
+            automake \
+            libtool \
+            libtool-bin \
+            pkg-config \
+            flex \
+            bison \
+            gettext \
+            libgcrypt20-dev \
+            libavcodec-dev \
+            libavutil-dev \
+            libavformat-dev \
+            libswscale-dev \
+            libswresample-dev \
+            libxml2-dev
+
+      - name: Bootstrap VLC
+        run: cd vlc && ./bootstrap
+
+      - name: Configure VLC
+        run: |
+          mkdir vlc/build && cd vlc/build
+          ../configure \
+            --disable-lua \
+            --disable-vlm \
+            --disable-nls \
+            --disable-dbus \
+            --disable-qt \
+            --disable-skins2 \
+            --disable-xcb \
+            --disable-wayland \
+            --disable-gles2 \
+            --disable-egl \
+            --disable-alsa \
+            --disable-pulse \
+            --disable-jack \
+            --enable-avcodec \
+            --enable-avformat \
+            --enable-swscale \
+            --enable-optimizations
+
+      - name: Build VLC
+        run: cd vlc/build && make -j"$(nproc)"
+
+      - name: Verify build
+        run: |
+          echo "=== Checking build artifacts ==="
+          ls -la vlc/build/lib/.libs/libvlc.so*
+          ls -la vlc/build/src/.libs/libvlccore.so*
+          ls -la vlc/build/bin/vlc-static
+          echo "Modules built: $(find vlc/build/modules/.libs/ -name '*.so' | wc -l)"
+          echo "=== VLC build verified ==="
+
+      - name: Test VLC runs
+        run: |
+          ./run.sh --version
+          timeout 5 ./run.sh -I dummy --no-video --no-audio vlc://quit || true
