@@ -2,6 +2,72 @@
 
 This project is the Realtime Streaming Engine of the VLC Player, with Offline AI Subtitle Generation.
 
+## Components
+
+### 1. VLC Streaming Engine
+A headless VLC build optimized for media streaming and transcoding (Linux/Docker).
+
+### 2. LuminaPlayer
+A desktop media player built with JavaFX and libVLC, featuring:
+- Full media playback (video, audio, subtitles) with VLC codec support
+- **AI-powered offline subtitle generation** using Whisper speech-to-text
+- Network streaming support (HTTP, RTSP, RTMP, HLS)
+- Playlist management with shuffle and repeat modes
+- Audio/subtitle track selection and delay adjustment
+- Seek bar with time preview tooltip
+- Dark theme UI with keyboard shortcuts
+
+## LuminaPlayer Quick Start
+
+### Prerequisites
+- Java 17+
+- Maven 3.x
+- VLC 3.0+ installed on your system (or bundled native libraries)
+
+### Build & Run
+```bash
+cd lumina-player
+mvn clean package
+mvn javafx:run
+```
+
+### AI Subtitle Generation Setup
+To use the offline subtitle generation feature:
+
+1. **Install FFmpeg** - [Download FFmpeg](https://ffmpeg.org/download.html) and add to PATH
+2. **Install whisper.cpp** - [Download whisper.cpp](https://github.com/ggerganov/whisper.cpp/releases) and add to PATH
+3. **Download a Whisper model**:
+   ```powershell
+   # Using the included script (Windows)
+   .\scripts\download-whisper-model.ps1 -Model base
+   ```
+   Or manually download from [HuggingFace](https://huggingface.co/ggerganov/whisper.cpp) and place in a `models/` directory.
+
+4. Open a media file in LuminaPlayer, then use **Subtitles > Generate Subtitles (AI)** or press `Ctrl+Shift+G`.
+
+### Native Library Bundling (Windows)
+To bundle VLC libraries for standalone distribution:
+```powershell
+.\scripts\download-vlc-libs.ps1
+```
+This downloads VLC 3.0.x Windows 64-bit libraries to `native/win-x64/`.
+
+### Keyboard Shortcuts
+| Key | Action |
+|-----|--------|
+| `Space` | Play/Pause |
+| `F11` / `F` | Toggle fullscreen |
+| `M` | Toggle mute |
+| `Right` / `Left` | Skip +/- 10 seconds |
+| `Up` / `Down` | Volume +/- 5% |
+| `N` / `P` | Next/Previous track |
+| `E` | Next frame |
+| `Ctrl+O` | Open file |
+| `Ctrl+N` | Open network stream |
+| `Ctrl+Shift+G` | Generate subtitles (AI) |
+| `Ctrl+I` | Media information |
+| `Ctrl+Q` | Exit |
+
 ## Prerequisites
 
 - Ubuntu 24.04 (or compatible Linux distribution)

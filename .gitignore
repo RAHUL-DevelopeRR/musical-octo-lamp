@@ -30,3 +30,13 @@ vlc/m4/lt*.m4
 # OS
 .DS_Store
 Thumbs.db
+
+# Local temp/work folders
+tmpclaude-*-cwd
+**/tmpclaude-*-cwd
+%TEMP%/
+nul
+
+# Java/Maven build outputs
+lumina-player/target/
+**/target/
