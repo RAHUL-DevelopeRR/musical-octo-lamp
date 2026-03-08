@@ -25,10 +25,10 @@ public class MenuBarBuilder {
     private final Runnable onLoadSubtitle;
     private final Runnable onSnapshot;
     private final Runnable onShowAbout;
-    private final Runnable onShowWhatsNew;
     private final Runnable onOpenNetworkStream;
     private final Runnable onGenerateSubtitles;
     private final Runnable onToggleSubtitleOverlay;
+    private Menu whatsNewMenu;
 
     public MenuBarBuilder(PlayerController playerController,
                           PlaylistController playlistController,
@@ -38,7 +38,6 @@ public class MenuBarBuilder {
                           Runnable onLoadSubtitle,
                           Runnable onSnapshot,
                           Runnable onShowAbout,
-                          Runnable onShowWhatsNew,
                           Runnable onOpenNetworkStream,
                           Runnable onGenerateSubtitles,
                           Runnable onToggleSubtitleOverlay) {
@@ -50,7 +49,6 @@ public class MenuBarBuilder {
         this.onLoadSubtitle = onLoadSubtitle;
         this.onSnapshot = onSnapshot;
         this.onShowAbout = onShowAbout;
-        this.onShowWhatsNew = onShowWhatsNew;
         this.onOpenNetworkStream = onOpenNetworkStream;
         this.onGenerateSubtitles = onGenerateSubtitles;
         this.onToggleSubtitleOverlay = onToggleSubtitleOverlay;
@@ -58,6 +56,7 @@ public class MenuBarBuilder {
 
     public MenuBar build() {
         MenuBar menuBar = new MenuBar();
+        whatsNewMenu = buildWhatsNewMenu();
         menuBar.getMenus().addAll(
             buildFileMenu(),
             buildPlaybackMenu(),
@@ -65,9 +64,14 @@ public class MenuBarBuilder {
             buildSubtitleMenu(),
             buildVideoMenu(),
             buildToolsMenu(),
+            whatsNewMenu,
             buildHelpMenu()
         );
         return menuBar;
+    }
+
+    public Menu getWhatsNewMenu() {
+        return whatsNewMenu;
     }
 
     private Menu buildFileMenu() {
@@ -96,24 +100,22 @@ public class MenuBarBuilder {
     private Menu buildPlaybackMenu() {
         Menu menu = new Menu("Playback");
 
-        MenuItem playPause = new MenuItem("Play/Pause");
-        playPause.setAccelerator(new KeyCodeCombination(KeyCode.SPACE));
+        MenuItem playPause = new MenuItem("Play/Pause                    Space");
+        // Bare-key accelerator removed: handled by MainWindow.setupKeyboardShortcuts()
+        // which properly guards against text input fields
         playPause.setOnAction(e -> playerController.togglePlayPause());
 
         MenuItem stop = new MenuItem("Stop");
         stop.setAccelerator(new KeyCodeCombination(KeyCode.S, KeyCombination.CONTROL_DOWN));
         stop.setOnAction(e -> playerController.stop());
 
-        MenuItem nextFrame = new MenuItem("Next Frame");
-        nextFrame.setAccelerator(new KeyCodeCombination(KeyCode.E));
+        MenuItem nextFrame = new MenuItem("Next Frame                       E");
         nextFrame.setOnAction(e -> playerController.nextFrame());
 
-        MenuItem skipFwd = new MenuItem("Skip Forward 10s");
-        skipFwd.setAccelerator(new KeyCodeCombination(KeyCode.RIGHT));
+        MenuItem skipFwd = new MenuItem("Skip Forward 10s            Right");
         skipFwd.setOnAction(e -> playerController.skipForward(10000));
 
-        MenuItem skipBwd = new MenuItem("Skip Backward 10s");
-        skipBwd.setAccelerator(new KeyCodeCombination(KeyCode.LEFT));
+        MenuItem skipBwd = new MenuItem("Skip Backward 10s           Left");
         skipBwd.setOnAction(e -> playerController.skipBackward(10000));
 
         // Speed submenu
@@ -138,17 +140,14 @@ public class MenuBarBuilder {
     private Menu buildAudioMenu() {
         Menu menu = new Menu("Audio");
 
-        MenuItem mute = new MenuItem("Toggle Mute");
-        mute.setAccelerator(new KeyCodeCombination(KeyCode.M));
+        MenuItem mute = new MenuItem("Toggle Mute                      M");
         mute.setOnAction(e -> playerController.toggleMute());
 
-        MenuItem volUp = new MenuItem("Volume Up");
-        volUp.setAccelerator(new KeyCodeCombination(KeyCode.UP));
+        MenuItem volUp = new MenuItem("Volume Up                       Up");
         volUp.setOnAction(e -> playerController.setVolume(
             Math.min(200, playerController.volumeProperty().get() + 5)));
 
-        MenuItem volDown = new MenuItem("Volume Down");
-        volDown.setAccelerator(new KeyCodeCombination(KeyCode.DOWN));
+        MenuItem volDown = new MenuItem("Volume Down                 Down");
         volDown.setOnAction(e -> playerController.setVolume(
             Math.max(0, playerController.volumeProperty().get() - 5)));
 
@@ -205,8 +204,7 @@ public class MenuBarBuilder {
         generateSubs.setAccelerator(new KeyCodeCombination(KeyCode.G, KeyCombination.CONTROL_DOWN, KeyCombination.SHIFT_DOWN));
         generateSubs.setOnAction(e -> onGenerateSubtitles.run());
 
-        MenuItem toggleOverlay = new MenuItem("Toggle Subtitle Overlay");
-        toggleOverlay.setAccelerator(new KeyCodeCombination(KeyCode.V));
+        MenuItem toggleOverlay = new MenuItem("Toggle Subtitle Overlay       V");
         toggleOverlay.setOnAction(e -> onToggleSubtitleOverlay.run());
 
         MenuItem disableSubs = new MenuItem("Disable Subtitles");
@@ -306,10 +304,52 @@ public class MenuBarBuilder {
         mediaInfo.setAccelerator(new KeyCodeCombination(KeyCode.I, KeyCombination.CONTROL_DOWN));
         mediaInfo.setOnAction(e -> showMediaInfoDialog());
 
-        MenuItem whatsNew = new MenuItem("What's New");
-        whatsNew.setOnAction(e -> onShowWhatsNew.run());
+        menu.getItems().addAll(generateSubs2, new SeparatorMenuItem(), mediaInfo);
+        return menu;
+    }
 
-        menu.getItems().addAll(generateSubs2, whatsNew, new SeparatorMenuItem(), mediaInfo);
+    private Menu buildWhatsNewMenu() {
+        Menu menu = new Menu("What's New");
+
+        MenuItem headline = new MenuItem("Architectural Innovations & Product Highlights");
+        headline.setDisable(true);
+
+        MenuItem novelty1 = new MenuItem("Novelty 1: .dsrt Progressive Subtitle Format");
+        novelty1.setDisable(true);
+        MenuItem novelty1Details = new MenuItem("Progressive loading, fast cue lookup, and early subtitle availability");
+        novelty1Details.setDisable(true);
+
+        MenuItem novelty2 = new MenuItem("Novelty 2: Priority-Chunk Latency Pipeline");
+        novelty2.setDisable(true);
+        MenuItem novelty2Details = new MenuItem("First chunk prioritized for quick time-to-first-subtitle");
+        novelty2Details.setDisable(true);
+
+        MenuItem novelty3 = new MenuItem("Novelty 3: Multi-Model Translation Verification");
+        novelty3.setDisable(true);
+        MenuItem novelty3Details = new MenuItem("Pluggable providers with optional second-pass verification");
+        novelty3Details.setDisable(true);
+
+        MenuItem novelty4 = new MenuItem("Offline-First AI Media Pipeline");
+        novelty4.setDisable(true);
+        MenuItem novelty4Details = new MenuItem("On-device transcription and translation with privacy-first flow");
+        novelty4Details.setDisable(true);
+
+        menu.getItems().addAll(
+            headline,
+            new SeparatorMenuItem(),
+            novelty1,
+            novelty1Details,
+            new SeparatorMenuItem(),
+            novelty2,
+            novelty2Details,
+            new SeparatorMenuItem(),
+            novelty3,
+            novelty3Details,
+            new SeparatorMenuItem(),
+            novelty4,
+            novelty4Details
+        );
+
         return menu;
     }
 
@@ -319,13 +359,10 @@ public class MenuBarBuilder {
         MenuItem shortcuts = new MenuItem("Keyboard Shortcuts");
         shortcuts.setOnAction(e -> showShortcutsDialog());
 
-        MenuItem whatsNew = new MenuItem("What's New");
-        whatsNew.setOnAction(e -> onShowWhatsNew.run());
-
         MenuItem about = new MenuItem("About " + AppConfig.APP_NAME);
         about.setOnAction(e -> onShowAbout.run());
 
-        menu.getItems().addAll(shortcuts, whatsNew, new SeparatorMenuItem(), about);
+        menu.getItems().addAll(shortcuts, new SeparatorMenuItem(), about);
         return menu;
     }
 

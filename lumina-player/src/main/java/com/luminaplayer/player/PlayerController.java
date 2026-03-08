@@ -128,15 +128,13 @@ public class PlayerController {
     }
 
     public void pause() {
-        engine.mediaPlayer().controls().pause();
+        engine.mediaPlayer().controls().setPause(true);
     }
 
     public void togglePlayPause() {
-        PlaybackState state = playbackState.get();
-        if (state == PlaybackState.PLAYING) {
+        if (engine.mediaPlayer().status().isPlaying()) {
             pause();
-        } else if (state == PlaybackState.PAUSED || state == PlaybackState.STOPPED
-                   || state == PlaybackState.IDLE || state == PlaybackState.BUFFERING) {
+        } else {
             play();
         }
     }
@@ -151,15 +149,19 @@ public class PlayerController {
     }
 
     public void seekToTime(long millis) {
-        engine.mediaPlayer().controls().setTime(millis);
+        long duration = totalDuration.get();
+        long clamped = duration > 0
+            ? Math.max(0, Math.min(millis, duration))
+            : Math.max(0, millis);
+        engine.mediaPlayer().controls().setTime(clamped);
     }
 
     public void skipForward(long millis) {
-        engine.mediaPlayer().controls().skipTime(millis);
+        seekToTime(currentTime.get() + Math.max(0, millis));
     }
 
     public void skipBackward(long millis) {
-        engine.mediaPlayer().controls().skipTime(-millis);
+        seekToTime(currentTime.get() - Math.max(0, millis));
     }
 
     public void nextFrame() {

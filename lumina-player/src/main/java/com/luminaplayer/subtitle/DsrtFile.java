@@ -94,7 +94,12 @@ public class DsrtFile {
             long start = entry.getStartTimeMs() + offsetMs;
             long end = entry.getEndTimeMs() + offsetMs;
             DsrtCue cue = new DsrtCue(id, start, end, entry.getText(), chunkIndex);
-            cueMap.put(start, cue);
+            // Avoid key collision: bump key by 1ms if already occupied
+            long key = start;
+            while (cueMap.containsKey(key)) {
+                key++;
+            }
+            cueMap.put(key, cue);
         }
         lastModified = Instant.now().toString();
         log.debug("Added {} cues for chunk {} (offset {}ms)", entries.size(), chunkIndex, offsetMs);
@@ -105,6 +110,19 @@ public class DsrtFile {
      */
     public void removeCuesForChunk(int chunkIndex) {
         cueMap.values().removeIf(cue -> cue.chunkIndex() == chunkIndex);
+    }
+
+    /**
+     * Returns all cues belonging to a specific chunk.
+     */
+    public List<DsrtCue> getCuesForChunk(int chunkIndex) {
+        List<DsrtCue> result = new ArrayList<>();
+        for (DsrtCue cue : cueMap.values()) {
+            if (cue.chunkIndex() == chunkIndex) {
+                result.add(cue);
+            }
+        }
+        return result;
     }
 
     /**

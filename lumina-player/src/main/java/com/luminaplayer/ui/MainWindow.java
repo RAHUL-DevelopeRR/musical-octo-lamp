@@ -1,7 +1,9 @@
 package com.luminaplayer.ui;
 
 import com.luminaplayer.app.AppConfig;
+import com.luminaplayer.ai.training.TrainingDataCollector;
 import com.luminaplayer.player.MediaInfo;
+import com.luminaplayer.player.PlaybackState;
 import com.luminaplayer.player.PlayerController;
 import com.luminaplayer.playlist.PlaylistController;
 import com.luminaplayer.util.FileUtils;
@@ -10,6 +12,7 @@ import javafx.application.Platform;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.MenuBar;
+import javafx.scene.control.Menu;
 import javafx.scene.input.TransferMode;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.VBox;
@@ -21,6 +24,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -37,6 +41,7 @@ public class MainWindow {
     private final StatusBar statusBar;
     private final PlaylistPanel playlistPanel;
     private MenuBar menuBar;
+    private Menu whatsNewMenu;
     private FullScreenHandler fullScreenHandler;
 
     private final PlayerController playerController;
@@ -45,6 +50,8 @@ public class MainWindow {
 
     private boolean playlistVisible = true;
     private boolean whatsNewShown;
+    private boolean resumePlaybackAfterGeneration;
+    private DsrtGenerationDialog generationPanel;
 
     public MainWindow(Stage stage, PlayerController playerController, PlaylistController playlistController) {
         this.stage = stage;
@@ -69,12 +76,12 @@ public class MainWindow {
             this::showLoadSubtitleDialog,
             this::takeSnapshot,
             this::showAboutDialog,
-            this::showWhatsNewDialog,
             this::showNetworkStreamDialog,
             this::showGenerateSubtitlesDialog,
             () -> videoPane.getSubtitleOverlay().toggleVisibility()
         );
         menuBar = menuBuilder.build();
+        whatsNewMenu = menuBuilder.getWhatsNewMenu();
 
         // --- Bottom controls ---
         VBox controlContainer = new VBox();
@@ -96,6 +103,17 @@ public class MainWindow {
         seekBar.setOnSeek(() ->
             playerController.seek((float) seekBar.getSeekPosition()));
         seekBar.totalDurationProperty().bind(playerController.totalDurationProperty());
+
+        // Clear any dynamic subtitle overlay when media changes.
+        // Without this, old .dsrt cues can remain visible as a stale layer on the next video.
+        playerController.currentMediaProperty().addListener((obs, oldMedia, newMedia) -> {
+            if (oldMedia != null && newMedia != null
+                && !Objects.equals(oldMedia.getFilePath(), newMedia.getFilePath())) {
+                videoPane.getSubtitleOverlay().deactivate();
+                videoPane.showLoadingOverlay(false);
+                resumePlaybackAfterGeneration = false;
+            }
+        });
 
         // --- Wire playlist panel ---
         playlistPanel.setOnItemSelected(item ->
@@ -166,7 +184,11 @@ public class MainWindow {
             return;
         }
         whatsNewShown = true;
-        Platform.runLater(this::showWhatsNewDialog);
+        Platform.runLater(() -> {
+            if (whatsNewMenu != null) {
+                whatsNewMenu.show();
+            }
+        });
     }
 
     private void setupKeyboardShortcuts(Scene scene) {
@@ -250,11 +272,20 @@ public class MainWindow {
 
     private void togglePlaylist() {
         playlistVisible = !playlistVisible;
+        if (generationPanel != null) return; // don't swap while generation panel is up
         if (playlistVisible) {
             root.setRight(playlistPanel);
         } else {
             root.setRight(null);
         }
+    }
+
+    private void hideGenerationPanel() {
+        if (generationPanel != null) {
+            generationPanel.dispose();
+            generationPanel = null;
+        }
+        root.setRight(playlistVisible ? playlistPanel : null);
     }
 
     private void showOpenFileDialog() {
@@ -365,30 +396,51 @@ public class MainWindow {
             log.info("Creating DsrtGenerationDialog: mediaFile={}, duration={}ms, currentTime={}ms",
                 mediaFile.getName(), totalDuration, currentTime);
 
-            DsrtGenerationDialog dialog = new DsrtGenerationDialog(
+            DsrtGenerationDialog panel = new DsrtGenerationDialog(
                 stage, mediaFile, totalDuration, currentTime,
                 dsrtFile -> {
-                    // First chunk ready - activate subtitle overlay
                     log.info("First chunk ready, activating subtitle overlay ({} cues)",
                         dsrtFile.getCueCount());
                     videoPane.getSubtitleOverlay().activate(dsrtFile);
+                    videoPane.showLoadingOverlay(false);
+                    if (resumePlaybackAfterGeneration) {
+                        playerController.play();
+                    }
                 },
                 dsrtFile -> {
-                    // All complete
                     log.info("DSRT generation complete: {} cues across {} chunks",
                         dsrtFile.getCueCount(), dsrtFile.getCompletedChunkCount());
-                }
+                    int addedPairs = TrainingDataCollector.collectJaEnPairs(dsrtFile);
+                    if (addedPairs > 0) {
+                        log.info("Collected {} new JA-EN training pairs at {}",
+                            addedPairs, TrainingDataCollector.getCorpusPath());
+                    }
+                },
+                isGenerating -> {
+                    if (isGenerating) {
+                        resumePlaybackAfterGeneration =
+                            playerController.playbackStateProperty().get() == PlaybackState.PLAYING;
+                        videoPane.setLoadingMessage("Generating first priority chunk...");
+                        videoPane.showLoadingOverlay(true);
+                        playerController.pause();
+                    } else {
+                        videoPane.showLoadingOverlay(false);
+                        if (resumePlaybackAfterGeneration) {
+                            playerController.play();
+                        }
+                        resumePlaybackAfterGeneration = false;
+                    }
+                },
+                this::hideGenerationPanel
             );
 
-            // Ensure dialog inherits the application stylesheet
-            dialog.getDialogPane().getStylesheets().addAll(
-                stage.getScene().getStylesheets());
-
-            log.info("Showing DsrtGenerationDialog...");
-            dialog.show();
-            log.info("DsrtGenerationDialog.show() returned");
+            generationPanel = panel;
+            log.info("Showing generation panel...");
+            root.setRight(panel);
         } catch (Exception ex) {
             log.error("Failed to show subtitle generation dialog", ex);
+            videoPane.showLoadingOverlay(false);
+            resumePlaybackAfterGeneration = false;
             Alert errorAlert = new Alert(Alert.AlertType.ERROR);
             errorAlert.setTitle("Subtitle Generation Error");
             errorAlert.setHeaderText("Could not open subtitle generation dialog");
@@ -439,11 +491,6 @@ public class MainWindow {
         );
         alert.initOwner(stage);
         alert.showAndWait();
-    }
-
-    private void showWhatsNewDialog() {
-        WhatsNewDialog dialog = new WhatsNewDialog(stage, stage.getScene().getStylesheets());
-        dialog.showAndWait();
     }
 
     private FileChooser createMediaFileChooser(String title) {

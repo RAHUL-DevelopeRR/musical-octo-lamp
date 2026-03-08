@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -20,6 +22,8 @@ public class WhisperEngine {
 
     private Path whisperBinaryPath;
     private Path modelsDirectory;
+    private final CopyOnWriteArrayList<Process> activeProcesses = new CopyOnWriteArrayList<>();
+    private int threadCountOverride = 0; // 0 = auto-detect
 
     public WhisperEngine() {
         this.whisperBinaryPath = findWhisperBinary();
@@ -32,6 +36,14 @@ public class WhisperEngine {
 
     public void setModelsDirectory(Path dir) {
         this.modelsDirectory = dir;
+    }
+
+    /**
+     * Sets the thread count override for whisper.cpp's -t flag.
+     * Use 0 (default) for automatic detection (availableProcessors - 1).
+     */
+    public void setThreadCount(int threadCount) {
+        this.threadCountOverride = threadCount;
     }
 
     public boolean isAvailable() {
@@ -71,9 +83,9 @@ public class WhisperEngine {
      * @param language       target language (or AUTO for detection)
      * @param translate      if true, translate to English
      * @param progressUpdate callback for progress messages
-     * @return the generated SRT file, or null on failure
+     * @return the transcription result with SRT file and detected language, or null on failure
      */
-    public File transcribe(File wavFile, File outputSrt, WhisperModel model,
+    public TranscriptionResult transcribe(File wavFile, File outputSrt, WhisperModel model,
                            WhisperLanguage language, boolean translate,
                            Consumer<String> progressUpdate)
             throws IOException, InterruptedException {
@@ -91,9 +103,9 @@ public class WhisperEngine {
      * @param translate      if true, translate to English
      * @param quality        quality preset controlling beam search and sampling
      * @param progressUpdate callback for progress messages
-     * @return the generated SRT file, or null on failure
+     * @return the transcription result with SRT file and detected language, or null on failure
      */
-    public File transcribe(File wavFile, File outputSrt, WhisperModel model,
+    public TranscriptionResult transcribe(File wavFile, File outputSrt, WhisperModel model,
                            WhisperLanguage language, boolean translate,
                            WhisperQuality quality,
                            Consumer<String> progressUpdate)
@@ -164,12 +176,14 @@ public class WhisperEngine {
         // Split on word boundaries for better subtitle segments
         command.add("-sow");
 
-        // Threading - use available cores
-        int threads = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+        // Threading - use override or auto-detect
+        int threads = threadCountOverride > 0 ? threadCountOverride
+            : Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
         command.add("-t");
         command.add(String.valueOf(threads));
 
         command.add("-pp");                // print progress
+        command.add("-ls");                // log best decoder scores for confidence scoring
 
         log.info("Running Whisper: {}", String.join(" ", command));
         progressUpdate.accept("Starting transcription with " + model.modelName() + " model...");
@@ -182,6 +196,11 @@ public class WhisperEngine {
             pb.environment().put("LANG", "en_US.UTF-8");
         }
         Process process = pb.start();
+        activeProcesses.add(process);
+
+        String detectedLanguage = null;
+        double sumLogProb = 0;
+        int logProbCount = 0;
 
         // Read progress output with UTF-8 encoding
         try (BufferedReader reader = new BufferedReader(
@@ -189,6 +208,32 @@ public class WhisperEngine {
             String line;
             while ((line = reader.readLine()) != null) {
                 log.debug("whisper: {}", line);
+                // Capture auto-detected language
+                if (line.contains("auto-detected language:")) {
+                    int idx = line.indexOf("auto-detected language:");
+                    detectedLanguage = line.substring(idx + 23).trim();
+                    log.info("Auto-detected language: {}", detectedLanguage);
+                }
+                // Capture log probability for confidence scoring
+                // whisper.cpp with -ls outputs token scores. Also look for
+                // "log_prob_avg" or "logprob" patterns in output.
+                if (line.contains("logprob") || line.contains("log_prob")
+                        || line.contains("score")) {
+                    try {
+                        // Try to parse any floating point number after '=' or ':'
+                        int sepIdx = Math.max(line.indexOf('='), line.indexOf(':'));
+                        if (sepIdx > 0 && sepIdx < line.length() - 1) {
+                            String val = line.substring(sepIdx + 1).trim().split("[\\s,;\\]\\)]")[0];
+                            double parsed = Double.parseDouble(val);
+                            if (parsed < 0 && parsed > -10) { // Valid log-prob range
+                                sumLogProb += parsed;
+                                logProbCount++;
+                            }
+                        }
+                    } catch (NumberFormatException ignored) {
+                        // Non-fatal: skip unparseable score lines
+                    }
+                }
                 String progress = parseWhisperProgress(line);
                 if (progress != null) {
                     progressUpdate.accept(progress);
@@ -196,7 +241,15 @@ public class WhisperEngine {
             }
         }
 
-        int exitCode = process.waitFor();
+        double avgLogProb = logProbCount > 0 ? sumLogProb / logProbCount : 0.0;
+
+        boolean finished = process.waitFor(15, TimeUnit.MINUTES);
+        activeProcesses.remove(process);
+        if (!finished) {
+            process.destroyForcibly();
+            throw new IOException("Whisper transcription timed out after 15 minutes");
+        }
+        int exitCode = process.exitValue();
         if (exitCode != 0) {
             log.error("Whisper exited with code: {}", exitCode);
             throw new IOException("Whisper transcription failed (exit code " + exitCode + ")");
@@ -204,12 +257,28 @@ public class WhisperEngine {
 
         File srtFile = new File(outputBase + ".srt");
         if (srtFile.exists() && srtFile.length() > 0) {
-            log.info("Transcription complete: {}", srtFile.getAbsolutePath());
-            return srtFile;
+            log.info("Transcription complete: {} (avgLogProb={})", srtFile.getAbsolutePath(),
+                String.format("%.4f", avgLogProb));
+            return new TranscriptionResult(srtFile, detectedLanguage, avgLogProb);
         }
 
         log.error("SRT file not generated: {}", srtFile.getAbsolutePath());
         return null;
+    }
+
+    /**
+     * Forcibly destroys all active whisper.cpp processes.
+     * Used for cancellation.
+     */
+    public void destroyAllProcesses() {
+        for (Process p : activeProcesses) {
+            try {
+                p.destroyForcibly();
+            } catch (Exception e) {
+                log.debug("Error destroying whisper process", e);
+            }
+        }
+        activeProcesses.clear();
     }
 
     private String parseWhisperProgress(String line) {

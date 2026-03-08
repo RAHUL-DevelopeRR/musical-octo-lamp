@@ -9,7 +9,6 @@ import javafx.geometry.Pos;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.stage.FileChooser;
-import javafx.stage.Modality;
 import javafx.stage.Stage;
 
 import java.io.File;
@@ -22,16 +21,19 @@ import java.util.function.Consumer;
  * using the .dsrt (Dynamic SRT) format. Processes the first 30-second chunk
  * immediately, then generates subsequent chunks in parallel via multithreading.
  */
-public class DsrtGenerationDialog extends Dialog<DsrtFile> {
+public class DsrtGenerationDialog extends VBox {
 
-    private static final long DEFAULT_CHUNK_DURATION_MS = 30_000;
+    private static final long DEFAULT_CHUNK_DURATION_MS = 60_000;
 
+    private final Stage owner;
+    private final Runnable onClose;
     private final ChunkedSubtitleGenerator generator;
     private final File mediaFile;
     private final long totalDurationMs;
     private final long currentTimeMs;
     private final Consumer<DsrtFile> onFirstChunkReady;
     private final Consumer<DsrtFile> onComplete;
+    private final Consumer<Boolean> onGenerationStateChanged;
 
     private ComboBox<WhisperModel> modelSelector;
     private ComboBox<WhisperLanguage> languageSelector;
@@ -62,21 +64,31 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
     public DsrtGenerationDialog(Stage owner, File mediaFile, long totalDurationMs,
                                  long currentTimeMs,
                                  Consumer<DsrtFile> onFirstChunkReady,
-                                 Consumer<DsrtFile> onComplete) {
+                                 Consumer<DsrtFile> onComplete,
+                                 Consumer<Boolean> onGenerationStateChanged,
+                                 Runnable onClose) {
+        this.owner = owner;
+        this.onClose = onClose;
         this.generator = new ChunkedSubtitleGenerator();
         this.mediaFile = mediaFile;
         this.totalDurationMs = totalDurationMs;
         this.currentTimeMs = currentTimeMs;
         this.onFirstChunkReady = onFirstChunkReady;
         this.onComplete = onComplete;
+        this.onGenerationStateChanged = onGenerationStateChanged;
 
-        setTitle("Generate Dynamic Subtitles (.dsrt)");
-        initOwner(owner);
-        initModality(Modality.NONE);
-        setResizable(true);
+        setStyle("-fx-background-color: #1e1e2e;");
+        setPrefWidth(340);
+        setMaxWidth(400);
 
         buildContent();
         checkToolAvailability();
+    }
+
+    /** Cancel any running tasks and clean up. */
+    public void dispose() {
+        if (currentDownloadTask != null && currentDownloadTask.isRunning()) currentDownloadTask.cancel();
+        if (currentTask != null && currentTask.isRunning()) currentTask.cancel();
     }
 
     /**
@@ -128,13 +140,21 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
     }
 
     private void buildContent() {
-        DialogPane pane = getDialogPane();
-        pane.getStyleClass().add("dsrt-gen-dialog");
-        pane.setPrefWidth(550);
-        pane.setPrefHeight(760);
+        // Header with title and close button
+        Label titleLabel = new Label("Generate Dynamic Subtitles (.dsrt)");
+        titleLabel.setStyle("-fx-text-fill: #ffffff; -fx-font-size: 14px; -fx-font-weight: bold;");
+        HBox.setHgrow(titleLabel, Priority.ALWAYS);
+        titleLabel.setMaxWidth(Double.MAX_VALUE);
+        Button closeBtn = new Button("\u2715");
+        closeBtn.setStyle("-fx-background-color: transparent; -fx-text-fill: #aaaaaa; -fx-font-size: 14px; -fx-cursor: hand;");
+        closeBtn.setOnAction(e -> { if (onClose != null) onClose.run(); });
+        HBox header = new HBox(titleLabel, closeBtn);
+        header.setAlignment(Pos.CENTER_LEFT);
+        header.setPadding(new Insets(8, 8, 4, 12));
+        header.setStyle("-fx-background-color: #151525;");
 
-        VBox content = new VBox(12);
-        content.setPadding(new Insets(16));
+        VBox content = new VBox(10);
+        content.setPadding(new Insets(10));
 
         // --- File Info ---
         Label fileLabel = new Label("Media file: " + (mediaFile != null ? mediaFile.getName() : "None"));
@@ -214,9 +234,29 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
         // --- Chunk Duration ---
         Label chunkLabel = new Label("Chunk (sec):");
         chunkLabel.setStyle("-fx-text-fill: #cccccc;");
-        chunkDurationSpinner = new Spinner<>(15, 120, 30, 15);
+        chunkDurationSpinner = new Spinner<>(15, 120, 60, 15);
         chunkDurationSpinner.setEditable(true);
         chunkDurationSpinner.setMaxWidth(Double.MAX_VALUE);
+
+        // Input validation: only allow numeric input and clamp on focus lost
+        chunkDurationSpinner.getEditor().setTextFormatter(new javafx.scene.control.TextFormatter<>(change -> {
+            String newText = change.getControlNewText();
+            if (newText.matches("\\d*")) {
+                return change;
+            }
+            return null;
+        }));
+        chunkDurationSpinner.focusedProperty().addListener((obs, wasFocused, isFocused) -> {
+            if (!isFocused) {
+                try {
+                    int val = Integer.parseInt(chunkDurationSpinner.getEditor().getText());
+                    val = Math.max(15, Math.min(120, val));
+                    chunkDurationSpinner.getValueFactory().setValue(val);
+                } catch (NumberFormatException ex) {
+                    chunkDurationSpinner.getValueFactory().setValue(60);
+                }
+            }
+        });
 
         Label chunkDescLabel = new Label("Longer chunks give Whisper more context for better accuracy");
         chunkDescLabel.setStyle("-fx-text-fill: #888888; -fx-font-size: 11px;");
@@ -243,31 +283,28 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
             boolean isTranslate = translateCheckBox.isSelected();
 
             if (isNonEnglish || isTranslate) {
-                // Auto-upgrade to best available model >= MEDIUM
+                // Auto-upgrade to best available model >= SMALL
                 WhisperModel currentModel = modelSelector.getValue();
-                WhisperModel recommended = getBestAvailableModelAtLeast(WhisperModel.MEDIUM);
+                WhisperModel recommended = getBestAvailableModelAtLeast(WhisperModel.SMALL);
                 if (currentModel != null && currentModel.ordinal() < recommended.ordinal()) {
                     modelSelector.setValue(recommended);
                     updateModelDescription();
                 }
-                // If nothing >= MEDIUM is available, show MEDIUM as selected so
+                // If nothing >= SMALL is available, show SMALL as selected so
                 // the download button appears
-                if (recommended.ordinal() < WhisperModel.MEDIUM.ordinal()) {
-                    modelSelector.setValue(WhisperModel.MEDIUM);
+                if (recommended.ordinal() < WhisperModel.SMALL.ordinal()) {
+                    modelSelector.setValue(WhisperModel.SMALL);
                     updateModelDescription();
                 }
-                // Upgrade quality to BEST
-                if (qualitySelector.getValue() != WhisperQuality.BEST) {
-                    qualitySelector.setValue(WhisperQuality.BEST);
-                    qualityDesc.setText(WhisperQuality.BEST.description());
-                }
-                // Upgrade chunk duration to 60s for more context
-                if (chunkDurationSpinner.getValue() < 60) {
-                    chunkDurationSpinner.getValueFactory().setValue(60);
+                // Upgrade quality to BALANCED (fast enough while accurate)
+                if (qualitySelector.getValue() == WhisperQuality.FAST
+                        || qualitySelector.getValue() == WhisperQuality.INSTANT) {
+                    qualitySelector.setValue(WhisperQuality.BALANCED);
+                    qualityDesc.setText(WhisperQuality.BALANCED.description());
                 }
                 String modelName = modelSelector.getValue().modelName().toUpperCase();
                 autoUpgradeLabel.setText("Auto-upgraded to " + modelName +
-                    " model, BEST quality, 60s chunks for non-English accuracy");
+                    " model, BALANCED quality for non-English accuracy");
             } else {
                 autoUpgradeLabel.setText("");
             }
@@ -371,40 +408,33 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
         contentScroll.setVbarPolicy(ScrollPane.ScrollBarPolicy.AS_NEEDED);
         contentScroll.setPannable(true);
         contentScroll.setStyle("-fx-background-color: transparent; -fx-background: transparent;");
-
-        pane.setContent(contentScroll);
+        VBox.setVgrow(contentScroll, Priority.ALWAYS);
 
         // --- Buttons ---
-        ButtonType generateType = new ButtonType("Generate", ButtonBar.ButtonData.OK_DONE);
-        ButtonType cancelType = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
-        pane.getButtonTypes().addAll(generateType, cancelType);
+        generateBtn = new Button("Generate");
+        generateBtn.setStyle("-fx-background-color: #4fc3f7; -fx-text-fill: #000000; -fx-font-weight: bold; -fx-min-width: 90;");
+        generateBtn.setOnAction(e -> startGeneration());
 
-        generateBtn = (Button) pane.lookupButton(generateType);
-        cancelBtn = (Button) pane.lookupButton(cancelType);
-
-        generateBtn.setStyle("-fx-background-color: #4fc3f7; -fx-text-fill: #000000; -fx-font-weight: bold;");
-
-        // Handle generate action
-        generateBtn.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
-            e.consume();
-            startGeneration();
-        });
-
-        // Handle cancel
-        cancelBtn.addEventFilter(javafx.event.ActionEvent.ACTION, e -> {
+        cancelBtn = new Button("Cancel");
+        cancelBtn.setStyle("-fx-min-width: 70;");
+        cancelBtn.setOnAction(e -> {
             if (currentDownloadTask != null && currentDownloadTask.isRunning()) {
                 currentDownloadTask.cancel();
-                e.consume();
                 return;
             }
             if (currentTask != null && currentTask.isRunning()) {
                 currentTask.cancel();
-                e.consume();
                 return;
             }
+            if (onClose != null) onClose.run();
         });
 
-        setResultConverter(buttonType -> null);
+        HBox buttonBar = new HBox(10, generateBtn, cancelBtn);
+        buttonBar.setAlignment(Pos.CENTER_RIGHT);
+        buttonBar.setPadding(new Insets(8, 12, 8, 12));
+        buttonBar.setStyle("-fx-background-color: #151525;");
+
+        getChildren().addAll(header, new Separator(), contentScroll, buttonBar);
     }
 
     private void startModelDownload() {
@@ -543,6 +573,9 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
         keepOriginalCheckBox.setStyle("-fx-text-fill: #cccccc;");
         keepOriginalCheckBox.setSelected(true);
 
+        Label targetLangLabel = new Label("Target language: English");
+        targetLangLabel.setStyle("-fx-text-fill: #4fc3f7; -fx-font-size: 11px;");
+
         // Status label
         orchestrationStatusLabel = new Label("");
         orchestrationStatusLabel.setStyle("-fx-text-fill: #888888; -fx-font-size: 11px;");
@@ -581,7 +614,7 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
             boolean isMultiModel = !orchestrationModeSelector.getValue().startsWith("Single");
             providerControls.setVisible(isMultiModel);
             providerControls.setManaged(isMultiModel);
-            translateCheckBox.setSelected(!isMultiModel);
+            translateCheckBox.setSelected(isMultiModel);
             translateCheckBox.setDisable(isMultiModel);
         });
 
@@ -604,7 +637,7 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
         fc.setHgrow(Priority.ALWAYS);
         provGrid.getColumnConstraints().addAll(lc, fc);
 
-        providerControls.getChildren().addAll(provGrid, keepOriginalCheckBox,
+        providerControls.getChildren().addAll(provGrid, targetLangLabel, keepOriginalCheckBox,
                 new HBox(8, checkBtn, orchestrationStatusLabel));
         providerControls.setVisible(false);
         providerControls.setManaged(false);
@@ -673,7 +706,9 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
         }
 
         config.setTranslationProvider(provider);
-        config.setKeepOriginalText(keepOriginalCheckBox.isSelected());
+        WhisperLanguage selectedLanguage = languageSelector.getValue();
+        boolean forceKeepOriginal = selectedLanguage == WhisperLanguage.JAPANESE;
+        config.setKeepOriginalText(forceKeepOriginal || keepOriginalCheckBox.isSelected());
         config.setTargetLanguage("en");
         return config;
     }
@@ -696,7 +731,7 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
         ffBrowse.setOnAction(e -> {
             FileChooser fc = new FileChooser();
             fc.setTitle("Select FFmpeg Executable");
-            File file = fc.showOpenDialog(getOwner());
+            File file = fc.showOpenDialog(owner);
             if (file != null) {
                 ffmpegField.setText(file.getAbsolutePath());
                 generator.getAudioExtractor().setFfmpegPath(file.toPath());
@@ -719,7 +754,7 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
         whBrowse.setOnAction(e -> {
             FileChooser fc = new FileChooser();
             fc.setTitle("Select Whisper Executable");
-            File file = fc.showOpenDialog(getOwner());
+            File file = fc.showOpenDialog(owner);
             if (file != null) {
                 whisperField.setText(file.getAbsolutePath());
                 generator.getWhisperEngine().setWhisperBinaryPath(file.toPath());
@@ -862,6 +897,19 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
         WhisperQuality quality = qualitySelector.getValue();
         long chunkDurationMs = chunkDurationSpinner.getValue() * 1000L;
 
+        boolean usingArgosMultiModel = orchestrationModeSelector != null
+            && orchestrationModeSelector.getValue() != null
+            && !orchestrationModeSelector.getValue().startsWith("Single")
+            && providerSelector != null
+            && providerSelector.getValue() != null
+            && providerSelector.getValue().startsWith("Argos");
+
+        if (usingArgosMultiModel && lang == WhisperLanguage.AUTO) {
+            statusLabel.setText("Argos Translate needs a source language. Set Language to the spoken language (not Auto-detect).");
+            statusLabel.setStyle("-fx-text-fill: #ff6b6b; -fx-font-size: 12px;");
+            return;
+        }
+
         // Configure orchestration if enabled
         OrchestrationConfig orchestrationConfig = buildOrchestrationConfig();
         if (orchestrationConfig != null && orchestrationConfig.isMultiModel()) {
@@ -883,6 +931,10 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
         downloadBtn.setDisable(true);
         progressBar.setVisible(true);
         progressBar.setProgress(-1);
+
+        if (onGenerationStateChanged != null) {
+            onGenerationStateChanged.accept(true);
+        }
 
         cancelBtn.setText("Cancel");
 
@@ -979,6 +1031,9 @@ public class DsrtGenerationDialog extends Dialog<DsrtFile> {
         chunkDurationSpinner.setDisable(false);
         downloadBtn.setDisable(false);
         cancelBtn.setText("Close");
+        if (onGenerationStateChanged != null) {
+            onGenerationStateChanged.accept(false);
+        }
     }
 
     private void rebuildChunkGrid(int totalChunks) {

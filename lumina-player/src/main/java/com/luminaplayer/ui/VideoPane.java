@@ -13,6 +13,7 @@ public class VideoPane extends StackPane {
 
     private final ImageView videoImageView;
     private final SubtitleOverlay subtitleOverlay;
+    private final LoadingOverlay loadingOverlay;
 
     public VideoPane(PlayerController playerController) {
         this.videoImageView = new ImageView();
@@ -21,9 +22,10 @@ public class VideoPane extends StackPane {
         videoImageView.fitHeightProperty().bind(this.heightProperty());
 
         this.subtitleOverlay = new SubtitleOverlay(playerController);
+        this.loadingOverlay = new LoadingOverlay();
 
         setStyle("-fx-background-color: #000000;");
-        getChildren().addAll(videoImageView, subtitleOverlay);
+        getChildren().addAll(videoImageView, loadingOverlay, subtitleOverlay);
     }
 
     public ImageView getImageView() {
@@ -32,5 +34,13 @@ public class VideoPane extends StackPane {
 
     public SubtitleOverlay getSubtitleOverlay() {
         return subtitleOverlay;
+    }
+
+    public void showLoadingOverlay(boolean show) {
+        loadingOverlay.setVisible(show);
+    }
+
+    public void setLoadingMessage(String message) {
+        loadingOverlay.setMessage(message);
     }
 }

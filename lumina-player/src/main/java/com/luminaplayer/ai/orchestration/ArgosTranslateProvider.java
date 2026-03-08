@@ -127,11 +127,23 @@ public class ArgosTranslateProvider implements TranslationProvider {
         if (text == null || text.isBlank()) return text;
 
         try {
-            // Use Python one-liner for single translation
+            String src = mapLangCode(sourceLang);
+            String tgt = mapLangCode(targetLang);
+
+            if (!isLanguagePairAvailable(src, tgt)) {
+                throw new TranslationException("Argos language pack missing for " + src + " -> " + tgt +
+                    ". Install with: argospm install translate-" + src + "_" + tgt);
+            }
+
+            // Use Python one-liner for single translation with explicit language pair resolution
             String script = String.format(
                 "import argostranslate.translate; " +
-                "print(argostranslate.translate.translate('%s', '%s', '%s'))",
-                escapePython(text), mapLangCode(sourceLang), mapLangCode(targetLang));
+                "langs=argostranslate.translate.get_installed_languages(); " +
+                "src=next((l for l in langs if l.code=='%s'), None); " +
+                "tgt=next((l for l in langs if l.code=='%s'), None); " +
+                "tr=src.get_translation(tgt) if src and tgt else None; " +
+                "print(tr.translate('%s') if tr else '')",
+                src, tgt, escapePython(text));
 
             ProcessBuilder pb = new ProcessBuilder(pythonPath.toString(), "-c", script);
             pb.redirectErrorStream(true);
@@ -164,6 +176,13 @@ public class ArgosTranslateProvider implements TranslationProvider {
                                         String targetLang) throws TranslationException {
         if (texts == null || texts.isEmpty()) return texts;
 
+        String src = mapLangCode(sourceLang);
+        String tgt = mapLangCode(targetLang);
+        if (!isLanguagePairAvailable(src, tgt)) {
+            throw new TranslationException("Argos language pack missing for " + src + " -> " + tgt +
+                ". Install with: argospm install translate-" + src + "_" + tgt);
+        }
+
         // For batch translation, write a Python script to translate all at once
         // This avoids the overhead of starting a new Python process per sentence
         try {
@@ -186,6 +205,13 @@ public class ArgosTranslateProvider implements TranslationProvider {
                     
                     source_lang = '%s'
                     target_lang = '%s'
+
+                    langs = argostranslate.translate.get_installed_languages()
+                    src = next((l for l in langs if l.code == source_lang), None)
+                    tgt = next((l for l in langs if l.code == target_lang), None)
+                    tr = src.get_translation(tgt) if src and tgt else None
+                    if tr is None:
+                        raise RuntimeError(f'Missing Argos language pack: {source_lang} -> {target_lang}')
                     
                     with open(r'%s', 'r', encoding='utf-8') as f:
                         lines = f.read().strip().split('\\n')
@@ -195,7 +221,7 @@ public class ArgosTranslateProvider implements TranslationProvider {
                         line = line.strip()
                         if line:
                             try:
-                                translated = argostranslate.translate.translate(line, source_lang, target_lang)
+                                translated = tr.translate(line)
                                 results.append(translated)
                             except Exception as e:
                                 results.append(line)  # Keep original on error
@@ -207,8 +233,8 @@ public class ArgosTranslateProvider implements TranslationProvider {
                     
                     print('OK:' + str(len(results)))
                     """,
-                    mapLangCode(sourceLang),
-                    mapLangCode(targetLang),
+                    src,
+                    tgt,
                     tempInput.toString().replace("\\", "\\\\"),
                     tempOutput.toString().replace("\\", "\\\\")
                 );
@@ -268,6 +294,44 @@ public class ArgosTranslateProvider implements TranslationProvider {
     @Override
     public int getMaxCharsPerRequest() {
         return 10000; // Argos handles large batches well since it's local
+    }
+
+    /**
+     * Returns true when the specific source->target Argos package is installed.
+     */
+    public boolean isLanguagePairAvailable(String sourceLang, String targetLang) {
+        if (pythonPath == null) return false;
+
+        String src = mapLangCode(sourceLang);
+        String tgt = mapLangCode(targetLang);
+
+        try {
+            String script = String.format(
+                "import argostranslate.translate; " +
+                "langs=argostranslate.translate.get_installed_languages(); " +
+                "s=next((l for l in langs if l.code=='%s'), None); " +
+                "t=next((l for l in langs if l.code=='%s'), None); " +
+                "ok=(s is not None and t is not None and s.get_translation(t) is not None); " +
+                "print('OK' if ok else 'NO')",
+                src, tgt
+            );
+
+            ProcessBuilder pb = new ProcessBuilder(pythonPath.toString(), "-c", script);
+            pb.redirectErrorStream(true);
+            Process proc = pb.start();
+
+            String output;
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(proc.getInputStream(), StandardCharsets.UTF_8))) {
+                output = reader.lines().reduce("", (a, b) -> a + b).trim();
+            }
+
+            int exit = proc.waitFor();
+            return exit == 0 && "OK".equals(output);
+        } catch (Exception e) {
+            log.debug("Argos language pair check failed for {} -> {}", src, tgt, e);
+            return false;
+        }
     }
 
     /**

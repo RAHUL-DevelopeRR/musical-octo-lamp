@@ -83,8 +83,10 @@ public class SubtitleGenerator {
 
             // Output SRT next to the original media file
             File outputSrt = new File(mediaFile.getParent(), baseName + ".srt");
-            File result = whisperEngine.transcribe(tempWav, outputSrt, model,
+            TranscriptionResult transcription = whisperEngine.transcribe(tempWav, outputSrt, model,
                 language, translate, progressUpdate);
+
+            File result = transcription != null ? transcription.srtFile() : null;
 
             if (result != null) {
                 progressUpdate.accept("Subtitles generated: " + result.getName());

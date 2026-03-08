@@ -41,11 +41,11 @@ public class ControlBar extends HBox {
         setPadding(new Insets(6, 16, 8, 16));
 
         // -- Transport buttons --
-        prevBtn = createButton("\u23EE", "Previous (P)");
+        prevBtn = createButton("\u23EE", "Back 10s (Left Arrow)");
         playPauseBtn = createButton("\u25B6", "Play/Pause (Space)");
         playPauseBtn.getStyleClass().add("play-pause-button");
         stopBtn = createButton("\u23F9", "Stop");
-        nextBtn = createButton("\u23ED", "Next (N)");
+        nextBtn = createButton("\u23ED", "Forward 10s (Right Arrow)");
         frameStepBtn = createButton("\u23E9", "Next Frame (E)");
         loopBtn = createButton("\uD83D\uDD01", "Loop (Ctrl+L)");
         shuffleBtn = createButton("\uD83D\uDD00", "Shuffle");
@@ -88,8 +88,8 @@ public class ControlBar extends HBox {
     private void wireActions() {
         playPauseBtn.setOnAction(e -> controller.togglePlayPause());
         stopBtn.setOnAction(e -> controller.stop());
-        prevBtn.setOnAction(e -> controller.playPrevious());
-        nextBtn.setOnAction(e -> controller.playNext());
+        prevBtn.setOnAction(e -> controller.skipBackward(10_000));
+        nextBtn.setOnAction(e -> controller.skipForward(10_000));
         frameStepBtn.setOnAction(e -> controller.nextFrame());
         loopBtn.setOnAction(e -> controller.toggleLoop());
 

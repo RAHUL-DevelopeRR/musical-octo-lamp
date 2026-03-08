@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -19,6 +21,7 @@ public class AudioExtractor {
     private static final Logger log = LoggerFactory.getLogger(AudioExtractor.class);
 
     private Path ffmpegPath;
+    private final CopyOnWriteArrayList<Process> activeProcesses = new CopyOnWriteArrayList<>();
 
     public AudioExtractor() {
         this.ffmpegPath = findFfmpeg();
@@ -71,6 +74,7 @@ public class AudioExtractor {
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectErrorStream(true);
         Process process = pb.start();
+        activeProcesses.add(process);
 
         // Read output for progress
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
@@ -83,7 +87,14 @@ public class AudioExtractor {
             }
         }
 
-        int exitCode = process.waitFor();
+        boolean finished = process.waitFor(10, TimeUnit.MINUTES);
+        activeProcesses.remove(process);
+        if (!finished) {
+            process.destroyForcibly();
+            log.error("FFmpeg timed out after 10 minutes");
+            return false;
+        }
+        int exitCode = process.exitValue();
         if (exitCode != 0) {
             log.error("FFmpeg exited with code: {}", exitCode);
             return false;
@@ -138,6 +149,7 @@ public class AudioExtractor {
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.redirectErrorStream(true);
         Process process = pb.start();
+        activeProcesses.add(process);
 
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
             String line;
@@ -149,13 +161,84 @@ public class AudioExtractor {
             }
         }
 
-        int exitCode = process.waitFor();
+        boolean finished = process.waitFor(2, TimeUnit.MINUTES);
+        activeProcesses.remove(process);
+        if (!finished) {
+            process.destroyForcibly();
+            log.error("FFmpeg chunk extraction timed out after 2 minutes");
+            return false;
+        }
+        int exitCode = process.exitValue();
         if (exitCode != 0) {
             log.error("FFmpeg chunk extraction exited with code: {}", exitCode);
             return false;
         }
 
         log.info("Audio chunk extraction complete: {} ({} bytes)", outputWav.getName(), outputWav.length());
+        return outputWav.exists() && outputWav.length() > 0;
+    }
+
+    /**
+     * Slices a chunk from an already-extracted WAV file. Much faster than extracting
+     * from the original media file since no video demuxing is needed.
+     *
+     * @param sourceWav      pre-extracted full audio WAV file
+     * @param outputWav      destination WAV file for this chunk
+     * @param startMs        start time in milliseconds
+     * @param durationMs     duration to extract in milliseconds
+     * @param progressUpdate callback for progress messages
+     * @return true if slicing succeeded
+     */
+    public boolean sliceWavChunk(File sourceWav, File outputWav, long startMs,
+                                 long durationMs, Consumer<String> progressUpdate)
+            throws IOException, InterruptedException {
+
+        if (ffmpegPath == null) {
+            throw new IOException("FFmpeg not found.");
+        }
+
+        List<String> command = new ArrayList<>();
+        command.add(ffmpegPath.toString());
+        command.add("-ss");
+        command.add(String.format(java.util.Locale.US, "%.3f", startMs / 1000.0));
+        command.add("-i");
+        command.add(sourceWav.getAbsolutePath());
+        command.add("-t");
+        command.add(String.format(java.util.Locale.US, "%.3f", durationMs / 1000.0));
+        command.add("-acodec");
+        command.add("copy");                 // no re-encoding needed for WAV→WAV
+        command.add("-y");
+        command.add(outputWav.getAbsolutePath());
+
+        log.debug("Slicing WAV chunk: {}", String.join(" ", command));
+        progressUpdate.accept(String.format("Slicing audio chunk (%.1fs - %.1fs)...",
+            startMs / 1000.0, (startMs + durationMs) / 1000.0));
+
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        activeProcesses.add(process);
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                log.debug("ffmpeg-slice: {}", line);
+            }
+        }
+
+        boolean finished = process.waitFor(2, TimeUnit.MINUTES);
+        activeProcesses.remove(process);
+        if (!finished) {
+            process.destroyForcibly();
+            log.error("FFmpeg WAV slice timed out after 2 minutes");
+            return false;
+        }
+        int exitCode = process.exitValue();
+        if (exitCode != 0) {
+            log.error("FFmpeg WAV slice exited with code: {}", exitCode);
+            return false;
+        }
+
         return outputWav.exists() && outputWav.length() > 0;
     }
 
@@ -214,5 +297,20 @@ public class AudioExtractor {
 
     private static boolean isWindows() {
         return System.getProperty("os.name", "").toLowerCase().contains("win");
+    }
+
+    /**
+     * Forcibly destroys all active FFmpeg processes.
+     * Used for cancellation.
+     */
+    public void destroyAllProcesses() {
+        for (Process p : activeProcesses) {
+            try {
+                p.destroyForcibly();
+            } catch (Exception e) {
+                log.debug("Error destroying ffmpeg process", e);
+            }
+        }
+        activeProcesses.clear();
     }
 }

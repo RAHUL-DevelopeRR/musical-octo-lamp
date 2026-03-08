@@ -578,19 +578,54 @@
 }
 
 /* ======================== Subtitle Overlay ======================== */
+.subtitle-overlay-container {
+    -fx-padding: 0 0 40 0;
+}
+
 .subtitle-overlay-label {
     -fx-text-fill: #ffffff;
-    -fx-font-size: 24px;
+    -fx-font-size: 22px;
     -fx-font-weight: bold;
-    -fx-font-family: "Segoe UI", "Inter", "Arial", sans-serif;
-    -fx-background-color: rgba(0, 0, 0, 0.75);
-    -fx-background-radius: 8;
-    -fx-padding: 8 20 8 20;
-    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.9), 6, 0, 0, 2);
+    -fx-font-family: "Segoe UI", "Arial", sans-serif;
     -fx-text-alignment: center;
-    -fx-border-color: rgba(255, 255, 255, 0.08);
-    -fx-border-radius: 8;
+}
+
+.subtitle-overlay-original-label {
+    -fx-text-fill: #ffd54f;
+    -fx-font-size: 16px;
+    -fx-font-family: "Segoe UI", "Arial", sans-serif;
+    -fx-text-alignment: center;
+}
+
+.subtitle-box {
+    -fx-background-color: rgba(0, 0, 0, 0.78);
+    -fx-background-radius: 10;
+    -fx-padding: 10 20 10 20;
+    -fx-effect: dropshadow(gaussian, rgba(0, 0, 0, 0.6), 8, 0, 0, 3);
+}
+
+.loading-overlay {
+    -fx-background-color: rgba(0, 0, 0, 0.45);
+}
+
+.loading-overlay-content {
+    -fx-alignment: center;
+    -fx-background-color: rgba(15, 16, 34, 0.9);
+    -fx-background-radius: 14;
+    -fx-border-color: rgba(0, 212, 255, 0.28);
+    -fx-border-radius: 14;
     -fx-border-width: 1;
+    -fx-padding: 18 24 18 24;
+}
+
+.loading-overlay-spinner {
+    -fx-progress-color: #00d4ff;
+}
+
+.loading-overlay-label {
+    -fx-text-fill: #d8e7ff;
+    -fx-font-size: 14px;
+    -fx-font-weight: bold;
 }
 
 /* ======================== Orchestration Badge ======================== */

@@ -6,6 +6,7 @@ package com.luminaplayer.ai;
  */
 public enum WhisperQuality {
 
+    INSTANT(1, 1, 3.2, 0.0, "Instant - fastest possible, greedy decoding"),
     FAST(1, 2, 2.8, 0.0, "Fast - greedy decoding, lower accuracy"),
     BALANCED(5, 5, 2.4, 0.0, "Balanced - beam search for good accuracy"),
     BEST(8, 8, 2.0, 0.0, "Best - large beam, highest accuracy, slowest");
