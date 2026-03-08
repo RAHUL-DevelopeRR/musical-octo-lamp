@@ -104,14 +104,18 @@ public class MainWindow {
             playerController.seek((float) seekBar.getSeekPosition()));
         seekBar.totalDurationProperty().bind(playerController.totalDurationProperty());
 
-        // Clear any dynamic subtitle overlay when media changes.
-        // Without this, old .dsrt cues can remain visible as a stale layer on the next video.
+        // Clear any dynamic subtitle overlay when media changes,
+        // and auto-load .dsrt sidecar file if one exists next to the video.
         playerController.currentMediaProperty().addListener((obs, oldMedia, newMedia) -> {
             if (oldMedia != null && newMedia != null
                 && !Objects.equals(oldMedia.getFilePath(), newMedia.getFilePath())) {
                 videoPane.getSubtitleOverlay().deactivate();
                 videoPane.showLoadingOverlay(false);
                 resumePlaybackAfterGeneration = false;
+            }
+            // Auto-load .dsrt sidecar if available
+            if (newMedia != null && newMedia.getFilePath() != null) {
+                tryAutoLoadDsrt(new File(newMedia.getFilePath()));
             }
         });
 
@@ -457,6 +461,44 @@ public class MainWindow {
             textArea.setMaxHeight(Double.MAX_VALUE);
             errorAlert.getDialogPane().setExpandableContent(textArea);
             errorAlert.showAndWait();
+        }
+    }
+
+    /**
+     * Tries to auto-load a .dsrt sidecar file next to the media file.
+     * If a fully-complete .dsrt exists, activates the subtitle overlay immediately
+     * so the user sees subtitles without needing to click "Generate".
+     */
+    private void tryAutoLoadDsrt(File mediaFile) {
+        if (mediaFile == null || !mediaFile.exists()) return;
+        // Don't auto-load if the overlay is already active (e.g., during generation)
+        if (videoPane.getSubtitleOverlay().isActive()) return;
+        String baseName = mediaFile.getName();
+        int dot = baseName.lastIndexOf('.');
+        if (dot > 0) baseName = baseName.substring(0, dot);
+        File dsrtFile = new File(mediaFile.getParent(), baseName + ".dsrt");
+        if (!dsrtFile.exists()) return;
+
+        try {
+            DsrtFile dsrt = DsrtFile.loadFrom(dsrtFile);
+            if (dsrt.isFullyComplete() && dsrt.getCueCount() > 0) {
+                log.info("Auto-loading .dsrt sidecar: {} ({} cues, {}/{} chunks)",
+                    dsrtFile.getName(), dsrt.getCueCount(),
+                    dsrt.getCompletedChunkCount(), dsrt.getTotalChunkCount());
+                Platform.runLater(() -> {
+                    try {
+                        playerController.getEngine().subtitles().disableSubtitles();
+                    } catch (Exception e) {
+                        // VLC may not be ready yet
+                    }
+                    videoPane.getSubtitleOverlay().activate(dsrt);
+                });
+            } else {
+                log.debug("Sidecar .dsrt exists but incomplete ({}/{} chunks, {} cues), skipping auto-load",
+                    dsrt.getCompletedChunkCount(), dsrt.getTotalChunkCount(), dsrt.getCueCount());
+            }
+        } catch (IOException e) {
+            log.debug("Could not auto-load .dsrt sidecar: {}", e.getMessage());
         }
     }
 

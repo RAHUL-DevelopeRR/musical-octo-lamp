@@ -166,6 +166,14 @@ public class DsrtFile {
         return (int) chunks.stream().filter(c -> c.getStatus() == ChunkStatus.COMPLETED).count();
     }
 
+    /**
+     * Returns true if all chunks are COMPLETED and there is at least one cue.
+     */
+    public boolean isFullyComplete() {
+        return !chunks.isEmpty() && !cueMap.isEmpty()
+            && getCompletedChunkCount() == chunks.size();
+    }
+
     public List<DsrtChunk> getPendingOrFailedChunks() {
         return chunks.stream()
             .filter(c -> c.getStatus() == ChunkStatus.PENDING || c.getStatus() == ChunkStatus.FAILED)

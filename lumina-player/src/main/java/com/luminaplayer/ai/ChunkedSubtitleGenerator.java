@@ -153,9 +153,25 @@ public class ChunkedSubtitleGenerator {
             totalChunks, totalDurationMs, priorityIndex, startFromMs);
 
         // --- Check if priority chunk is already cached ---
-        boolean priorityChunkCached = dsrtFile.getChunk(priorityIndex) != null
-            && dsrtFile.getChunk(priorityIndex).getStatus() == ChunkStatus.COMPLETED
-            && dsrtFile.getCuesForChunk(priorityIndex).size() > 0;
+        // A chunk is considered "fully cached" only if it was processed at full quality
+        // (not just a Phase 1 micro-chunk). We check that the cue count is reasonable
+        // for the full chunk duration. A micro-chunk (10s) typically produces 1-5 cues,
+        // while a full 60s chunk produces 10+ cues for normal speech.
+        int priorityCueCount = 0;
+        boolean priorityChunkCached = false;
+        if (dsrtFile.getChunk(priorityIndex) != null
+                && dsrtFile.getChunk(priorityIndex).getStatus() == ChunkStatus.COMPLETED) {
+            priorityCueCount = dsrtFile.getCuesForChunk(priorityIndex).size();
+            // A fully-processed chunk should have at least ~1 cue per 10s of audio.
+            // If it has fewer, it was likely only a micro-chunk (Phase 1) result.
+            long chunkDurSec = chunkDurationMs / 1000;
+            int minCuesForFull = Math.max(1, (int) (chunkDurSec / 15));
+            priorityChunkCached = priorityCueCount >= minCuesForFull;
+            if (!priorityChunkCached && priorityCueCount > 0) {
+                log.info("Priority chunk {} has {} cues (min {} for full cache), will re-process in Phase 2",
+                    priorityIndex, priorityCueCount, minCuesForFull);
+            }
+        }
 
         // --- Select fast model for micro-chunk ---
         WhisperModel firstChunkModel = WhisperModel.TINY;
@@ -247,11 +263,19 @@ public class ChunkedSubtitleGenerator {
             throw e;
         }
 
-        // If priority chunk was already cached, deliver it immediately
-        if (priorityChunkCached && firstChunkReadyCallback != null) {
+        // If priority chunk was already cached, deliver it immediately for fast display.
+        // This covers both fully cached AND partially cached (micro-chunk) cases.
+        if (priorityCueCount > 0 && firstChunkReadyCallback != null) {
             completedCount.set(dsrtFile.getCompletedChunkCount());
-            log.info("Priority chunk {} served from cache ({} cues)", priorityIndex,
-                dsrtFile.getCuesForChunk(priorityIndex).size());
+            boolean allCached = dsrtFile.getCompletedChunkCount() == totalChunks;
+            log.info("Priority chunk {} served from cache ({} cues, fullyCached={}, allChunksCached={})",
+                priorityIndex, priorityCueCount, priorityChunkCached, allCached);
+            if (allCached) {
+                progressCallback.accept(new ChunkProgressEvent(-1, totalChunks,
+                    ChunkStatus.COMPLETED,
+                    "Loaded from cache: " + dsrtFile.getCueCount() + " cues",
+                    totalChunks));
+            }
             firstChunkReadyCallback.accept(dsrtFile);
         }
 
@@ -278,10 +302,9 @@ public class ChunkedSubtitleGenerator {
 
         List<Integer> chunkOrder = buildChunkOrder(priorityIndex, totalChunks, dsrtFile);
 
-        // Always complete the priority chunk in Phase 2: Phase 1 only processed a 10s
-        // micro-chunk, so the remaining portion of the chunk must be covered here.
-        // This also upgrades quality when the user selected a better model than TINY.
-        // Skip if priority chunk was already cached with completed status.
+        // Always re-process the priority chunk in Phase 2 unless it was FULLY cached
+        // (with adequate cue coverage). Phase 1 only processed a 10s micro-chunk, so
+        // the priority chunk needs full-duration processing at the user's selected quality.
         if (!cancelled && !priorityChunkCached) {
             chunkOrder.add(priorityIndex);
             if (firstChunkModel != model || firstChunkQuality != quality
