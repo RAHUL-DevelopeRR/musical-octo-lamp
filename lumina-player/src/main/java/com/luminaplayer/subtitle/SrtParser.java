@@ -4,96 +4,137 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
-import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
- * Parses .srt subtitle files into a list of SubtitleEntry objects.
- * Handles UTF-8 (with BOM) and ISO-8859-1 encodings.
+ * Parses and writes standard {@code .srt} subtitle files.
  *
- * Note: vlcj handles subtitle rendering natively. This parser exists
- * as a fallback and for potential future custom rendering/AI processing.
+ * <p>Handles the three-line SRT block format:
+ * <pre>
+ * 1
+ * 00:00:01,200 --> 00:00:04,800
+ * Subtitle text here
+ * </pre>
  */
 public class SrtParser {
 
     private static final Logger log = LoggerFactory.getLogger(SrtParser.class);
 
-    // Pattern: HH:MM:SS,mmm --> HH:MM:SS,mmm
-    private static final Pattern TIME_PATTERN = Pattern.compile(
-        "(\\d{2}):(\\d{2}):(\\d{2}),(\\d{3})\\s*-->\\s*(\\d{2}):(\\d{2}):(\\d{2}),(\\d{3})"
-    );
+    // ── Parse ─────────────────────────────────────────────────────────────────
 
-    public List<SubtitleEntry> parse(File file) throws IOException {
-        Charset charset = detectCharset(file);
-        log.debug("Parsing SRT file: {} with charset: {}", file.getName(), charset);
-
+    /**
+     * Parses an SRT file into a list of {@link SubtitleEntry} objects.
+     */
+    public List<SubtitleEntry> parse(File srtFile) {
         List<SubtitleEntry> entries = new ArrayList<>();
+        if (srtFile == null || !srtFile.exists()) return entries;
 
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-                new FileInputStream(file), charset))) {
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(srtFile), StandardCharsets.UTF_8))) {
 
             String line;
+            int    index    = -1;
+            long   startMs  = 0;
+            long   endMs    = 0;
+            StringBuilder textBuf = new StringBuilder();
+
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
-                if (line.isEmpty()) continue;
 
-                // Try to parse as index number
-                int index;
-                try {
-                    index = Integer.parseInt(line);
-                } catch (NumberFormatException e) {
+                if (line.isEmpty()) {
+                    // Block separator — flush pending entry
+                    if (index > 0 && textBuf.length() > 0) {
+                        entries.add(new SubtitleEntry(index, startMs, endMs, textBuf.toString().trim()));
+                        textBuf.setLength(0);
+                        index = -1;
+                    }
                     continue;
                 }
 
-                // Next line should be the timestamp
-                String timeLine = reader.readLine();
-                if (timeLine == null) break;
-
-                Matcher matcher = TIME_PATTERN.matcher(timeLine.trim());
-                if (!matcher.find()) continue;
-
-                long startMs = parseTimeToMs(matcher, 1);
-                long endMs = parseTimeToMs(matcher, 5);
-
-                // Read text lines until empty line or EOF
-                StringBuilder text = new StringBuilder();
-                while ((line = reader.readLine()) != null) {
-                    line = line.trim();
-                    if (line.isEmpty()) break;
-                    if (!text.isEmpty()) text.append("\n");
-                    text.append(line);
+                if (index < 0) {
+                    // Expect sequence number
+                    try {
+                        index = Integer.parseInt(line);
+                    } catch (NumberFormatException e) {
+                        log.debug("SRT: skipping non-numeric line: {}", line);
+                    }
+                    continue;
                 }
 
-                entries.add(new SubtitleEntry(index, startMs, endMs, text.toString()));
+                if (line.contains("-->")) {
+                    // Timestamp line
+                    String[] parts = line.split("-->");
+                    if (parts.length == 2) {
+                        startMs = parseTimestamp(parts[0].trim());
+                        endMs   = parseTimestamp(parts[1].trim());
+                    }
+                    continue;
+                }
+
+                // Text line
+                if (textBuf.length() > 0) textBuf.append('\n');
+                textBuf.append(line);
             }
+
+            // Flush final entry (file may not end with blank line)
+            if (index > 0 && textBuf.length() > 0) {
+                entries.add(new SubtitleEntry(index, startMs, endMs, textBuf.toString().trim()));
+            }
+
+        } catch (IOException e) {
+            log.error("Failed to parse SRT file: {}", srtFile.getAbsolutePath(), e);
         }
 
-        log.info("Parsed {} subtitle entries from {}", entries.size(), file.getName());
+        log.debug("Parsed {} entries from {}", entries.size(), srtFile.getName());
         return entries;
     }
 
-    private long parseTimeToMs(Matcher matcher, int groupOffset) {
-        int hours = Integer.parseInt(matcher.group(groupOffset));
-        int minutes = Integer.parseInt(matcher.group(groupOffset + 1));
-        int seconds = Integer.parseInt(matcher.group(groupOffset + 2));
-        int millis = Integer.parseInt(matcher.group(groupOffset + 3));
-        return hours * 3600000L + minutes * 60000L + seconds * 1000L + millis;
-    }
+    // ── Write (new static helper used by WhisperEngine sidecar mode) ──────────
 
-    private Charset detectCharset(File file) throws IOException {
-        // Check for UTF-8 BOM
-        try (InputStream is = new FileInputStream(file)) {
-            byte[] bom = new byte[3];
-            int read = is.read(bom);
-            if (read >= 3 && bom[0] == (byte) 0xEF && bom[1] == (byte) 0xBB && bom[2] == (byte) 0xBF) {
-                return StandardCharsets.UTF_8;
+    /**
+     * Writes a list of {@link SubtitleEntry} objects to an SRT file.
+     * Used by the Faster-Whisper sidecar path to materialise the SRT on disk
+     * so the rest of the pipeline can load it normally.
+     */
+    public static void writeToFile(List<SubtitleEntry> entries, File outputFile)
+            throws IOException {
+        try (PrintWriter pw = new PrintWriter(
+                new OutputStreamWriter(new FileOutputStream(outputFile), StandardCharsets.UTF_8))) {
+            for (SubtitleEntry e : entries) {
+                pw.println(e.getIndex());
+                pw.println(formatTimestamp(e.getStartTimeMs()) + " --> " + formatTimestamp(e.getEndTimeMs()));
+                pw.println(e.getText());
+                pw.println();
             }
         }
-        // Default to UTF-8
-        return StandardCharsets.UTF_8;
+    }
+
+    // ── Timestamp helpers ─────────────────────────────────────────────────────
+
+    /** Parses {@code HH:MM:SS,mmm} or {@code HH:MM:SS.mmm} into milliseconds. */
+    public static long parseTimestamp(String ts) {
+        try {
+            ts = ts.replace(',', '.').trim();
+            String[] parts = ts.split(":");
+            if (parts.length != 3) return 0;
+            int    h   = Integer.parseInt(parts[0]);
+            int    m   = Integer.parseInt(parts[1]);
+            double s   = Double.parseDouble(parts[2]);
+            return (long) ((h * 3600L + m * 60L + s) * 1000);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /** Formats milliseconds as {@code HH:MM:SS,mmm}. */
+    public static String formatTimestamp(long ms) {
+        long totalSec = ms / 1000;
+        long millis   = ms % 1000;
+        long h = totalSec / 3600;
+        long m = (totalSec % 3600) / 60;
+        long s = totalSec % 60;
+        return String.format("%02d:%02d:%02d,%03d", h, m, s, millis);
     }
 }
