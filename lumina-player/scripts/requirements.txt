@@ -1,0 +1,48 @@
+# =============================================================================
+# LuminaPlayer — whisper_server.py dependencies
+# =============================================================================
+# Install (full, all features):
+#   pip install -r requirements.txt
+#
+# Install (minimal — speech only, no VAD, no sound events):
+#   pip install faster-whisper soundfile numpy
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# CORE — required for any transcription
+# -----------------------------------------------------------------------------
+
+# Faster-Whisper: INT8-quantised CTranslate2 backend for OpenAI Whisper
+# Keeps the model in RAM across chunks (eliminates the 1-3 min reload overhead)
+faster-whisper>=1.0.0
+
+# Numerical audio processing (used by every pipeline stage)
+numpy>=1.24.0
+
+# Audio file I/O — reads WAV into float32 numpy arrays (Stage 1)
+# Required for end-time correction, drift analysis, alignment refinement
+soundfile>=0.12.1
+
+# -----------------------------------------------------------------------------
+# STAGE 2 — Silero VAD  (strongly recommended — eliminates silence hallucinations)
+# Skipping this means Whisper will see silence and hallucinate text.
+# Install: pip install torch torchaudio
+# -----------------------------------------------------------------------------
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# -----------------------------------------------------------------------------
+# STAGE 7 — YAMNet Sound Event Detection  [optional]
+# Adds 60+ non-speech captions: applause, dog bark, explosion, music, etc.
+# Only loaded when request includes "sound_events": true
+# Install: pip install tensorflow tensorflow-hub
+# -----------------------------------------------------------------------------
+# tensorflow>=2.13.0        # [optional] uncomment to enable YAMNet SED
+# tensorflow-hub>=0.14.0    # [optional] uncomment to enable YAMNet SED
+
+# -----------------------------------------------------------------------------
+# CPU THROTTLE  [optional]
+# Keeps CPU usage below --max-cpu ceiling during transcription
+# Install: pip install psutil
+# -----------------------------------------------------------------------------
+# psutil>=5.9.0             # [optional] uncomment to enable CPU throttle
