@@ -620,6 +620,9 @@ public class DsrtGenerationDialog extends VBox {
         WhisperQuality  quality        = qualitySelector.getValue();
         long            chunkMs        = chunkDurationSpinner.getValue() * 1000L;
 
+        // Pass sound-events toggle to the sidecar
+        generator.getWhisperEngine().setSoundEvents(soundEventsCheckBox.isSelected());
+
         // Argos needs explicit source language
         boolean usingArgosMulti = orchestrationModeSelector != null
             && !orchestrationModeSelector.getValue().startsWith("Single")

@@ -1,5 +1,7 @@
 package com.luminaplayer.ai;
 
+import com.luminaplayer.subtitle.SubtitleEntry;
+import com.luminaplayer.subtitle.SrtParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,13 +37,16 @@ public class WhisperEngine {
     private Process sidecarProcess;
     private BufferedWriter sidecarWriter;
     private BufferedReader sidecarReader;
-    private volatile boolean sidecarFailed = false;   // true → fall back to whisper.cpp
+    private volatile int sidecarFailCount = 0;         // consecutive failures
+    private static final int MAX_SIDECAR_RETRIES = 3;  // restart up to 3 times
+    private final Object sidecarLock = new Object();    // serialize sidecar access
 
     // ── whisper.cpp fallback state ────────────────────────────────────────────
     private Path whisperBinaryPath;
     private Path modelsDirectory;
     private final CopyOnWriteArrayList<Process> activeProcesses = new CopyOnWriteArrayList<>();
     private int threadCountOverride = 0;
+    private volatile boolean soundEvents = false;
 
     // ── Sidecar script location ───────────────────────────────────────────────
     /** Path to whisper_server.py, resolved at construction time. */
@@ -58,6 +63,8 @@ public class WhisperEngine {
     public void setWhisperBinaryPath(Path path) { this.whisperBinaryPath = path; }
     public void setModelsDirectory(Path dir)    { this.modelsDirectory   = dir; }
     public void setThreadCount(int n)           { this.threadCountOverride = n; }
+    public void setSoundEvents(boolean enabled)   { this.soundEvents = enabled; }
+    public boolean isSoundEvents()                 { return soundEvents; }
 
     public boolean isAvailable() {
         // Available if either the sidecar script OR the whisper.cpp binary is present
@@ -76,7 +83,8 @@ public class WhisperEngine {
     public boolean isModelAvailable(WhisperModel model) {
         // For the sidecar, faster-whisper downloads models automatically; always report true
         // when the sidecar is usable.  For the CLI fallback, check the file on disk.
-        if (sidecarScript != null && Files.exists(sidecarScript) && !sidecarFailed)
+        if (sidecarScript != null && Files.exists(sidecarScript)
+                && sidecarFailCount < MAX_SIDECAR_RETRIES)
             return true;
         if (modelsDirectory == null) return false;
         return Files.exists(modelsDirectory.resolve(model.fileName()));
@@ -112,15 +120,21 @@ public class WhisperEngine {
             throws IOException, InterruptedException {
 
         // ── Try sidecar first ─────────────────────────────────────────────────
-        if (sidecarScript != null && Files.exists(sidecarScript) && !sidecarFailed) {
+        if (sidecarScript != null && Files.exists(sidecarScript)
+                && sidecarFailCount < MAX_SIDECAR_RETRIES) {
             try {
                 return transcribeViaSidecar(wavFile, outputSrt, model, language,
                         translate, quality, progressUpdate);
             } catch (Exception e) {
-                log.warn("Faster-Whisper sidecar failed ({}), falling back to whisper.cpp: {}",
+                sidecarFailCount++;
+                log.warn("Faster-Whisper sidecar failed ({}/{} retries, {}): {}",
+                        sidecarFailCount, MAX_SIDECAR_RETRIES,
                         e.getClass().getSimpleName(), e.getMessage());
-                sidecarFailed = true;
                 shutdownSidecar();
+                if (sidecarFailCount < MAX_SIDECAR_RETRIES) {
+                    log.info("Will restart sidecar on next request (attempt {})",
+                            sidecarFailCount + 1);
+                }
             }
         }
 
@@ -135,6 +149,8 @@ public class WhisperEngine {
 
     /**
      * Ensures the sidecar process is running and transcribes via JSON-lines protocol.
+     * Synchronized on sidecarLock to prevent parallel threads from interleaving
+     * requests/responses on the shared stdin/stdout pipe.
      */
     private TranscriptionResult transcribeViaSidecar(File wavFile, File outputSrt,
                                                       WhisperModel model, WhisperLanguage language,
@@ -142,6 +158,7 @@ public class WhisperEngine {
                                                       Consumer<String> progressUpdate)
             throws IOException, InterruptedException {
 
+      synchronized (sidecarLock) {
         ensureSidecarRunning(model);
 
         progressUpdate.accept("[faster-whisper] Transcribing with " + model.modelName() + " model…");
@@ -149,7 +166,7 @@ public class WhisperEngine {
         // Build JSON request
         String langCode = (language == WhisperLanguage.AUTO) ? "" : language.code();
         String reqJson = buildSidecarRequest(wavFile.getAbsolutePath(),
-                model.modelName(), langCode, quality, translate);
+                model.modelName(), langCode, quality, translate, soundEvents);
 
         log.info("Sidecar request: {}", reqJson);
         sidecarWriter.write(reqJson);
@@ -162,7 +179,13 @@ public class WhisperEngine {
             throw new IOException("Sidecar process closed its stdout unexpectedly.");
 
         log.info("Sidecar response length: {} chars", respLine.length());
+        log.debug("Sidecar raw response: {}", respLine);
+
+        // Reset failure counter on success
+        sidecarFailCount = 0;
+
         return parseSidecarResponse(respLine, outputSrt, progressUpdate);
+      }
     }
 
     /** Starts the sidecar process if it is not already running. */
@@ -217,12 +240,13 @@ public class WhisperEngine {
     /** Builds the JSON request string (manual, no external JSON library needed). */
     private static String buildSidecarRequest(String wavPath, String modelName,
                                                String langCode, WhisperQuality quality,
-                                               boolean translate) {
+                                               boolean translate, boolean soundEvents) {
         return String.format(
                 "{\"wav_path\":\"%s\",\"model\":\"%s\",\"language\":\"%s\","
-              + "\"quality\":\"%s\",\"translate\":%s}",
+              + "\"quality\":\"%s\",\"translate\":%s,\"sound_events\":%s}",
                 escapeJson(wavPath), modelName, langCode,
-                quality.name(), translate ? "true" : "false");
+                quality.name(), translate ? "true" : "false",
+                soundEvents ? "true" : "false");
     }
 
     /** Parses the sidecar JSON response and writes an SRT file. */
@@ -290,34 +314,57 @@ public class WhisperEngine {
 
     // ── Tiny JSON helpers (no external dependency) ────────────────────────────
 
+    /**
+     * Extracts a JSON string value for the given key.
+     * Handles both compact ({"key":"val"}) and spaced ({"key": "val"}) formats.
+     */
     private static String extractJsonString(String json, String key) {
-        String pattern = "\"" + key + "\"\\s*:\\s*\"";
-        int i = findPattern(json, pattern);
-        if (i < 0) return null;
-        int start = json.indexOf('"', i + key.length() + 3) + 1;
-        int end   = json.indexOf('"', start);
-        if (start <= 0 || end < 0) return null;
-        return json.substring(start, end)
+        // Find "key" then skip to the colon, then find the opening quote of the value
+        String needle = "\"" + key + "\"";
+        int keyIdx = json.indexOf(needle);
+        if (keyIdx < 0) return null;
+        // Find the colon after the key
+        int colonIdx = json.indexOf(':', keyIdx + needle.length());
+        if (colonIdx < 0) return null;
+        // Find the opening quote of the value (skip whitespace)
+        int openQuote = -1;
+        for (int i = colonIdx + 1; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '"') { openQuote = i; break; }
+            if (c != ' ' && c != '\t') return null; // value is not a string (null, number, etc.)
+        }
+        if (openQuote < 0) return null;
+        // Find the closing quote (handle escaped quotes)
+        int closeQuote = -1;
+        for (int i = openQuote + 1; i < json.length(); i++) {
+            if (json.charAt(i) == '\\') { i++; continue; } // skip escaped char
+            if (json.charAt(i) == '"') { closeQuote = i; break; }
+        }
+        if (closeQuote < 0) return null;
+        return json.substring(openQuote + 1, closeQuote)
                    .replace("\\\\", "\\").replace("\\\"", "\"");
     }
 
+    /**
+     * Extracts a JSON number value (as string) for the given key.
+     * Handles both compact and spaced JSON formats.
+     */
     private static String extractJsonNumber(String json, String key) {
-        String pattern = "\"" + key + "\"\\s*:\\s*";
-        int i = findPattern(json, pattern);
-        if (i < 0) return "";
-        int valStart = json.indexOf(':', i + key.length() + 2) + 1;
+        String needle = "\"" + key + "\"";
+        int keyIdx = json.indexOf(needle);
+        if (keyIdx < 0) return "";
+        int colonIdx = json.indexOf(':', keyIdx + needle.length());
+        if (colonIdx < 0) return "";
+        // Skip whitespace after colon to find the start of the number
+        int valStart = colonIdx + 1;
         while (valStart < json.length() && json.charAt(valStart) == ' ') valStart++;
         int valEnd = valStart;
         while (valEnd < json.length()) {
             char c = json.charAt(valEnd);
-            if (c == ',' || c == '}' || c == ']') break;
+            if (c == ',' || c == '}' || c == ']' || c == ' ') break;
             valEnd++;
         }
         return json.substring(valStart, valEnd).trim();
-    }
-
-    private static int findPattern(String text, String pattern) {
-        return text.indexOf(pattern.replace("\\\\", "\\").replace("\\s*", "").replace("\\\":", "\":"));
     }
 
     private static String escapeJson(String s) {
@@ -380,8 +427,8 @@ public class WhisperEngine {
         }
         if (translate) cmd.add("-tr");
 
-        // ── FIX: --no-context prevents cross-chunk hallucinations ─────────────
-        cmd.add("--no-context");
+        // ── FIX: --max-context 0 prevents cross-chunk hallucinations ────────
+        cmd.add("--max-context"); cmd.add("0");
 
         cmd.add("-bs");  cmd.add(String.valueOf(quality.beamSize()));
         cmd.add("-bo");  cmd.add(String.valueOf(quality.bestOf()));
@@ -538,6 +585,24 @@ public class WhisperEngine {
     }
 
     private static String findPython() {
+        // Check project .venv first (most likely to have faster-whisper installed)
+        Path appDir = Path.of(System.getProperty("user.dir"));
+        Path[] venvCandidates = isWindows()
+            ? new Path[]{
+                appDir.resolve(".venv").resolve("Scripts").resolve("python.exe"),
+                appDir.resolve("..").resolve(".venv").resolve("Scripts").resolve("python.exe"),
+                appDir.resolve("lumina-player").resolve(".venv").resolve("Scripts").resolve("python.exe")}
+            : new Path[]{
+                appDir.resolve(".venv").resolve("bin").resolve("python"),
+                appDir.resolve("..").resolve(".venv").resolve("bin").resolve("python"),
+                appDir.resolve("lumina-player").resolve(".venv").resolve("bin").resolve("python")};
+        for (Path venv : venvCandidates) {
+            if (Files.exists(venv)) {
+                log.info("Using venv Python: {}", venv);
+                return venv.toAbsolutePath().normalize().toString();
+            }
+        }
+
         for (String py : new String[]{"python3", "python"}) {
             if (findOnPath(py) != null) return py;
             // Windows: also check common install paths
